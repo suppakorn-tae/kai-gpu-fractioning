@@ -12,6 +12,7 @@ import (
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/mpsd/internal"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/mpsd/internal/driverlabel"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/mpsd/internal/nsreconcile"
 )
 
 func main() {
@@ -74,6 +75,21 @@ func main() {
 		StableThreshold:   flags.stableThreshold,
 		GracefulStopDelay: flags.gracefulStopDelay,
 	}, logger)
+
+	// sm-limit: keep one MPS namespace per requesting container on the shared
+	// server. Needs the shared server, so it follows the same chicken bit.
+	if flags.supportSMSharing && flags.nsInterval > 0 {
+		rec := nsreconcile.New(nsreconcile.Config{
+			RequestDir: flags.nsRequestDir,
+			Server:     internal.DefaultSharedServerName,
+			Interval:   flags.nsInterval,
+		}, nsreconcile.CLIRunner{
+			Binary:   flags.mpsBinary,
+			Protocol: flags.controlPort,
+			PipeDir:  flags.pipeDir,
+		}, &nsreconcile.NVMLDeviceMemory{}, logger.With("component", "namespace-reconciler"))
+		go rec.Run(ctx)
+	}
 
 	if err := supervisor.Run(ctx); err != nil {
 		logger.Error("mpsd exiting with error", "error", err)

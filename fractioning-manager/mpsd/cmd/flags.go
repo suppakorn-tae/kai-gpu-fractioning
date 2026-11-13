@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mpsns"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/mpsd/internal"
 	"github.com/kai-scheduler/gpu-fractioning/pkg/env"
 )
@@ -38,6 +39,10 @@ type cliFlags struct {
 	stableThreshold time.Duration
 	// gracefulStopDelay is the time to wait for SIGTERM before SIGKILL.
 	gracefulStopDelay time.Duration
+	// nsRequestDir is where fractiond writes sm-limit namespace requests.
+	nsRequestDir string
+	// nsInterval is the namespace reconcile interval (0 disables sm-limit support).
+	nsInterval time.Duration
 }
 
 func parseFlags() cliFlags {
@@ -78,6 +83,12 @@ func parseFlags() cliFlags {
 	flag.DurationVar(&f.gracefulStopDelay, "graceful-stop-delay",
 		env.Duration("MPS_GRACEFUL_STOP_DELAY", internal.DefaultGracefulStopDelay),
 		"time to wait for SIGTERM before SIGKILL on shutdown")
+	flag.StringVar(&f.nsRequestDir, "namespace-request-dir",
+		env.String("NAMESPACE_REQUEST_DIR", mpsns.DefaultRequestDir),
+		"directory fractiond writes sm-limit MPS namespace requests to")
+	flag.DurationVar(&f.nsInterval, "namespace-reconcile-interval",
+		env.Duration("NAMESPACE_RECONCILE_INTERVAL", 100*time.Millisecond),
+		"how often sm-limit namespace requests are reconciled into MPS namespaces (0 disables); needs --support-sm-sharing")
 	flag.Parse()
 	return f
 }
