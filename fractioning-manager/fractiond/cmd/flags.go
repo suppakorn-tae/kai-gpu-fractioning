@@ -9,6 +9,7 @@ import (
 
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/fsstore"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mpsns"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal"
 	"github.com/kai-scheduler/gpu-fractioning/pkg/env"
 )
@@ -41,6 +42,12 @@ type cliFlags struct {
 	// false, the gpu-compute.mode: sm-sharing annotation is rejected like any
 	// other invalid value.
 	supportSMSharing bool
+	// defaultComputeMode / enforceComputeMode set the compute-mode policy.
+	defaultComputeMode string
+	enforceComputeMode bool
+	// nsRequestDir / nsWait configure sm-limit's MPS namespace handshake with mpsd.
+	nsRequestDir string
+	nsWait       time.Duration
 	// mapDir is the shared dir for the container->pod mapping handoff.
 	mapDir string
 	// logPodEvents logs each recorded/removed mapping event.
@@ -82,6 +89,10 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.retroactiveEnforcement, "retroactive-enforcement", env.Bool("RETROACTIVE_ENFORCEMENT", true), "on NRI (re)connect, stop GPU-fractioning containers missing injection so kubelet recreates them correctly")
 	flag.StringVar(&f.criSocket, "cri-socket", env.String("CRI_SOCKET", defaultCRISocketPath), "CRI runtime socket used to stop containers during retroactive enforcement")
 	flag.DurationVar(&f.stopTimeout, "stop-timeout", 30*time.Second, "grace period handed to the runtime for each container stop during enforcement")
+	flag.StringVar(&f.defaultComputeMode, "default-compute-mode", env.String("DEFAULT_COMPUTE_MODE", "time-slicing"), "compute mode for containers without a gpu-compute.mode annotation: time-slicing, sm-sharing or sm-limit")
+	flag.BoolVar(&f.enforceComputeMode, "enforce-compute-mode", env.Bool("ENFORCE_COMPUTE_MODE", false), "ignore the gpu-compute.mode annotation and give every container the default mode")
+	flag.StringVar(&f.nsRequestDir, "namespace-request-dir", env.String("NAMESPACE_REQUEST_DIR", mpsns.DefaultRequestDir), "host directory for sm-limit MPS namespace requests read by mpsd (never mount into workloads)")
+	flag.DurationVar(&f.nsWait, "namespace-wait", env.Duration("NAMESPACE_WAIT", 1500*time.Millisecond), "how long CreateContainer waits for mpsd to create an sm-limit namespace (keep under the runtime's NRI plugin timeout)")
 	flag.Parse()
 	return f
 }

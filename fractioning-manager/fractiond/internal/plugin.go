@@ -5,14 +5,18 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/containerd/nri/pkg/api"
 
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/fsstore"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/store"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mpsns"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/audit"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/events"
@@ -50,6 +54,19 @@ type Config struct {
 	// invalid value, since mpsd's shared MPS server is disabled by the same
 	// toggle.
 	SupportSMSharing bool
+
+	// DefaultComputeMode is the mode for containers without a compute-mode
+	// annotation (default time-slicing). EnforceComputeMode makes it the only
+	// mode, ignoring the annotation, so workloads cannot opt out of sm-limit.
+	DefaultComputeMode annotations.ComputeMode
+	EnforceComputeMode bool
+
+	// NamespaceRequestDir is where sm-limit containers' MPS namespace requests
+	// are written for mpsd (mpsns.DefaultRequestDir when empty), and
+	// NamespaceWait how long CreateContainer waits for mpsd to create the
+	// namespace before failing the creation (kubelet retries it).
+	NamespaceRequestDir string
+	NamespaceWait       time.Duration
 
 	// RetroactiveEnforcement enables the audit pass on NRI (re)connect: any
 	// GPU-fractioning container found running without the expected injection is
@@ -101,6 +118,10 @@ type Plugin struct {
 	SupportSMSharing bool
 	Log              *slog.Logger
 
+	computePolicy annotations.ComputePolicy
+	nsRequestDir  string
+	nsWait        time.Duration
+
 	events    *events.Processor
 	adapter   adapter
 	readiness ReadinessSetter
@@ -133,6 +154,23 @@ func NewPlugin(cfg Config, stopper audit.ContainerStopper) (*Plugin, error) {
 		LogEvents: func() bool { return logPodEvents },
 	})
 
+	policy := annotations.ComputePolicy{
+		SMSharingEnabled: cfg.SupportSMSharing,
+		Default:          cfg.DefaultComputeMode,
+		Enforce:          cfg.EnforceComputeMode,
+	}
+	if _, err := annotations.ResolveComputeMode(nil, "", cfg.AnnotationPrefix, policy); err != nil {
+		return nil, fmt.Errorf("invalid compute-mode policy: %w", err)
+	}
+	nsDir := cfg.NamespaceRequestDir
+	if nsDir == "" {
+		nsDir = mpsns.DefaultRequestDir
+	}
+	nsWait := cfg.NamespaceWait
+	if nsWait <= 0 {
+		nsWait = 1500 * time.Millisecond
+	}
+
 	var sentinel *audit.Sentinel
 	if cfg.RetroactiveEnforcement {
 		if stopper == nil {
@@ -142,6 +180,8 @@ func NewPlugin(cfg Config, stopper audit.ContainerStopper) (*Plugin, error) {
 			AnnotationPrefix: cfg.AnnotationPrefix,
 			MPSPipeDirectory: cfg.MPSPipeDirectory,
 			SMSharingEnabled: cfg.SupportSMSharing,
+			ComputeDefault:   cfg.DefaultComputeMode,
+			ComputeEnforce:   cfg.EnforceComputeMode,
 			FailOpen:         cfg.FailOpen,
 		}, stopper, log)
 	}
@@ -153,7 +193,10 @@ func NewPlugin(cfg Config, stopper audit.ContainerStopper) (*Plugin, error) {
 		SupportSMSharing: cfg.SupportSMSharing,
 		Log:              log,
 		events:           proc,
-		adapter:          adapter{annotationPrefix: cfg.AnnotationPrefix, log: log},
+		adapter:          adapter{annotationPrefix: cfg.AnnotationPrefix, policy: policy, log: log},
+		computePolicy:    policy,
+		nsRequestDir:     nsDir,
+		nsWait:           nsWait,
 		readiness:        cfg.Readiness,
 		sentinel:         sentinel,
 	}, nil
@@ -196,6 +239,7 @@ func (p *Plugin) Synchronize(ctx context.Context, pods []*api.PodSandbox, contai
 			"recordedContainers", len(infos), "totalContainers", len(containers))
 		return infos
 	})
+	p.pruneNamespaceRequests(containers)
 	p.setReady(true)
 	if p.sentinel != nil {
 		p.sentinel.Audit(ctx, pods, containers)
@@ -260,7 +304,7 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 	// always enforced and the request is always populated for metrics.
 	gpuMemoryCfg = gpuMemoryCfg.ApplyDefaults()
 
-	computeMode, err := annotations.ParseComputeMode(pod.Annotations, ctr.Name, p.AnnotationPrefix, p.SupportSMSharing)
+	computeMode, err := annotations.ResolveComputeMode(pod.Annotations, ctr.Name, p.AnnotationPrefix, p.computePolicy)
 	if err != nil {
 		p.Log.Warn("failed to parse GPU compute mode annotation",
 			"container", ctr.Name,
@@ -276,7 +320,18 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 		)
 		computeMode = annotations.ComputeModeTimeSlicing
 	}
-	pipeSource, pipeDestination := injection.MPSPipeMount(p.MPSPipeDirectory, computeMode)
+	visibleDevices := annotations.ParseVisibleDevices(pod.Annotations, ctr.Name, p.AnnotationPrefix)
+	if computeMode == annotations.ComputeModeSMLimit {
+		// sm-limit needs the container's MPS namespace to exist before the
+		// runtime bind-mounts its directory. Fail the creation rather than
+		// start the container uncapped; kubelet retries it.
+		if err := p.ensureNamespace(pod, ctr, gpuMemoryCfg, visibleDevices); err != nil {
+			p.Log.Warn("sm-limit namespace not ready; failing container creation",
+				"container", ctr.Name, "pod", pod.Name, "error", err)
+			return nil, fmt.Errorf("container %q in pod %q: %w", ctr.Name, pod.Name, err)
+		}
+	}
+	pipeSource, pipeDestination := injection.MPSPipeMount(p.MPSPipeDirectory, computeMode, ctr.GetId())
 
 	adj := &api.ContainerAdjustment{}
 
@@ -306,7 +361,6 @@ func (p *Plugin) buildAdjustment(pod *api.PodSandbox, ctr *api.Container) (*api.
 	// nvidia.com/gpu). Our assignment must win: remove any existing value first so
 	// NRI applies the override instead of rejecting it as a conflict, and the
 	// container ends up with a single, correct value rather than a duplicate.
-	visibleDevices := annotations.ParseVisibleDevices(pod.Annotations, ctr.Name, p.AnnotationPrefix)
 	if visibleDevices != "" {
 		if containerHasEnv(ctr, injection.EnvVisibleDevices) {
 			adj.RemoveEnv(injection.EnvVisibleDevices)
@@ -342,7 +396,80 @@ func containerHasEnv(ctr *api.Container, key string) bool {
 // RemoveContainer drops the container's mapping when the runtime removes it.
 func (p *Plugin) RemoveContainer(_ context.Context, _ *api.PodSandbox, ctr *api.Container) error {
 	p.events.Delete(ctr.GetId())
+	if err := mpsns.Remove(p.nsRequestDir, mpsns.NamespaceName(ctr.GetId())); err != nil {
+		p.Log.Warn("removing MPS namespace request", "container", ctr.GetName(), "error", err)
+	}
 	return nil
+}
+
+// ensureNamespace asks mpsd for the container's MPS namespace and waits until
+// its control socket exists.
+func (p *Plugin) ensureNamespace(pod *api.PodSandbox, ctr *api.Container, mem annotations.GPUMemoryConfig, visibleDevices string) error {
+	smPercent, err := annotations.ParseSMPercent(pod.Annotations, ctr.Name, p.AnnotationPrefix)
+	if err != nil {
+		return err
+	}
+	ns := mpsns.NamespaceName(ctr.GetId())
+	req := mpsns.Request{
+		Namespace:   ns,
+		ContainerID: ctr.GetId(),
+		Container:   ctr.GetName(),
+		Pod:         pod.GetName(),
+		PodNS:       pod.GetNamespace(),
+		MemoryMiB:   mem.EffectiveMemoryMiB(),
+		SMPercent:   smPercent,
+		GPUUUIDs:    gpuUUIDs(visibleDevices),
+	}
+	if req.MemoryMiB <= 0 {
+		return errors.New("sm-limit needs a GPU memory allotment")
+	}
+	if err := mpsns.Write(p.nsRequestDir, req); err != nil {
+		return fmt.Errorf("writing MPS namespace request: %w", err)
+	}
+	socket := mpsns.ControlSocket(p.MPSPipeDirectory, ns)
+	deadline := time.Now().Add(p.nsWait)
+	for {
+		if _, err := os.Stat(socket); err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("MPS namespace %s not created by mpsd within %s", ns, p.nsWait)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+// gpuUUIDs extracts GPU UUIDs from a device assignment such as
+// "k8s.device-plugin.nvidia.com/gpu=GPU-54e7...,..." or "GPU-54e7...".
+func gpuUUIDs(visibleDevices string) []string {
+	var out []string
+	for _, tok := range strings.Split(visibleDevices, ",") {
+		tok = strings.TrimSpace(tok)
+		if i := strings.LastIndex(tok, "="); i >= 0 {
+			tok = tok[i+1:]
+		}
+		if strings.HasPrefix(tok, "GPU-") {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+// pruneNamespaceRequests drops requests for containers the runtime no longer
+// has (removed while fractiond was down), so mpsd deletes their namespaces.
+func (p *Plugin) pruneNamespaceRequests(containers []*api.Container) {
+	live := map[string]bool{}
+	for _, c := range containers {
+		live[mpsns.NamespaceName(c.GetId())] = true
+	}
+	reqs, _ := mpsns.List(p.nsRequestDir)
+	for ns := range reqs {
+		if !live[ns] {
+			if err := mpsns.Remove(p.nsRequestDir, ns); err == nil {
+				p.Log.Info("pruned MPS namespace request for a container that no longer exists", "namespace", ns)
+			}
+		}
+	}
 }
 
 // Shutdown flushes any queued mapping events and waits for in-flight

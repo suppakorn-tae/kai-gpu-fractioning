@@ -59,7 +59,92 @@ const (
 	// server instead of the default one. Only meaningful for a container that
 	// also carries a GPU-memory annotation.
 	ComputeModeSMSharing ComputeMode = "sm-sharing"
+	// ComputeModeSMLimit gives the container its own MPS namespace on the
+	// shared server, with an active-thread (SM) percentage derived from its
+	// GPU memory share, and mounts only that namespace's pipe directory. It
+	// needs the same shared server as sm-sharing.
+	ComputeModeSMLimit ComputeMode = "sm-limit"
 )
+
+// smPercentSuffix builds the optional per-container SM-share annotation,
+// e.g. "nvidia.com/container.trainer.gpu-compute.sm-percent". It can only
+// lower the share sm-limit derives from the memory allotment.
+const smPercentSuffix = "gpu-compute.sm-percent"
+
+// ComputePolicy is the cluster's compute-mode policy, set on fractiond's
+// command line.
+type ComputePolicy struct {
+	// SMSharingEnabled is the shared-MPS-server chicken bit; both sm-sharing
+	// and sm-limit need that server.
+	SMSharingEnabled bool
+	// Default is the mode used when a container has no compute-mode
+	// annotation. Empty means time-slicing.
+	Default ComputeMode
+	// Enforce makes Default the only mode: the annotation is ignored. Use it
+	// when workloads must not be able to opt out of their SM cap.
+	Enforce bool
+}
+
+// ResolveComputeMode returns the compute mode a container gets under policy p.
+// With p.Enforce, the annotation is ignored and p.Default returned; otherwise
+// an absent annotation means p.Default and a present one is parsed like
+// ParseComputeMode, also accepting "sm-limit".
+func ResolveComputeMode(annotations map[string]string, containerName, prefix string, p ComputePolicy) (ComputeMode, error) {
+	def := p.Default
+	if def == "" {
+		def = ComputeModeTimeSlicing
+	}
+	if err := p.allowed(def); err != nil {
+		return "", fmt.Errorf("default compute mode: %w", err)
+	}
+	if p.Enforce {
+		return def, nil
+	}
+	key := containerComputeModeAnnotationKey(prefix, containerName)
+	raw, ok := annotations[key]
+	if !ok {
+		return def, nil
+	}
+	switch val := ComputeMode(strings.TrimSpace(raw)); val {
+	case ComputeModeTimeSlicing, ComputeModeSMSharing, ComputeModeSMLimit:
+		if err := p.allowed(val); err != nil {
+			return "", fmt.Errorf("parsing annotation %q: %w", key, err)
+		}
+		return val, nil
+	default:
+		return "", fmt.Errorf("parsing annotation %q: invalid value %q, expected %q, %q or %q",
+			key, val, ComputeModeTimeSlicing, ComputeModeSMSharing, ComputeModeSMLimit)
+	}
+}
+
+func (p ComputePolicy) allowed(m ComputeMode) error {
+	switch m {
+	case ComputeModeTimeSlicing:
+		return nil
+	case ComputeModeSMSharing, ComputeModeSMLimit:
+		if !p.SMSharingEnabled {
+			return fmt.Errorf("value %q is not enabled on this cluster (sm-sharing support is disabled)", m)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown compute mode %q", m)
+	}
+}
+
+// ParseSMPercent reads the optional "<prefix><containerName>.gpu-compute.sm-percent"
+// annotation: an integer 1-100, or 0 when absent.
+func ParseSMPercent(annotations map[string]string, containerName, prefix string) (int, error) {
+	key := prefix + containerName + "." + smPercentSuffix
+	raw, ok := annotations[key]
+	if !ok {
+		return 0, nil
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || v < 1 || v > 100 {
+		return 0, fmt.Errorf("parsing annotation %q: %q is not an integer between 1 and 100", key, raw)
+	}
+	return v, nil
+}
 
 // GPUMemoryConfig holds the parsed GPU memory request and limit for a container.
 // Values are integer MiB strings suitable for NVIDIA MPS environment variables.

@@ -404,3 +404,50 @@ func TestApplyDefaults(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveComputeMode(t *testing.T) {
+	key := configuration.DefaultAnnotationPrefix + "trainer.gpu-compute.mode"
+	on := ComputePolicy{SMSharingEnabled: true}
+	tests := []struct {
+		name    string
+		ann     map[string]string
+		policy  ComputePolicy
+		want    ComputeMode
+		wantErr bool
+	}{
+		{"absent, no default", nil, on, ComputeModeTimeSlicing, false},
+		{"absent, default sm-limit", nil, ComputePolicy{SMSharingEnabled: true, Default: ComputeModeSMLimit}, ComputeModeSMLimit, false},
+		{"annotation sm-limit", map[string]string{key: "sm-limit"}, on, ComputeModeSMLimit, false},
+		{"annotation wins without enforce", map[string]string{key: "time-slicing"}, ComputePolicy{SMSharingEnabled: true, Default: ComputeModeSMLimit}, ComputeModeTimeSlicing, false},
+		{"enforce ignores opt-out", map[string]string{key: "time-slicing"}, ComputePolicy{SMSharingEnabled: true, Default: ComputeModeSMLimit, Enforce: true}, ComputeModeSMLimit, false},
+		{"enforce ignores garbage", map[string]string{key: "bogus"}, ComputePolicy{SMSharingEnabled: true, Default: ComputeModeSMLimit, Enforce: true}, ComputeModeSMLimit, false},
+		{"sm-limit needs shared server", map[string]string{key: "sm-limit"}, ComputePolicy{}, "", true},
+		{"default sm-limit needs shared server", nil, ComputePolicy{Default: ComputeModeSMLimit}, "", true},
+		{"invalid value", map[string]string{key: "fast"}, on, "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ResolveComputeMode(tt.ann, "trainer", configuration.DefaultAnnotationPrefix, tt.policy)
+			if (err != nil) != tt.wantErr || got != tt.want {
+				t.Fatalf("got %q, err %v; want %q, wantErr %v", got, err, tt.want, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParseSMPercent(t *testing.T) {
+	key := configuration.DefaultAnnotationPrefix + "trainer.gpu-compute.sm-percent"
+	for raw, want := range map[string]int{"25": 25, " 100 ": 100} {
+		if got, err := ParseSMPercent(map[string]string{key: raw}, "trainer", configuration.DefaultAnnotationPrefix); err != nil || got != want {
+			t.Fatalf("%q -> %d, %v", raw, got, err)
+		}
+	}
+	for _, raw := range []string{"0", "101", "x", ""} {
+		if _, err := ParseSMPercent(map[string]string{key: raw}, "trainer", configuration.DefaultAnnotationPrefix); err == nil {
+			t.Fatalf("%q accepted", raw)
+		}
+	}
+	if got, err := ParseSMPercent(nil, "trainer", configuration.DefaultAnnotationPrefix); got != 0 || err != nil {
+		t.Fatalf("absent -> %d, %v", got, err)
+	}
+}

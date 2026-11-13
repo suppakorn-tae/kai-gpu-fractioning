@@ -16,6 +16,7 @@ import (
 
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/audit"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/readiness"
 )
@@ -46,6 +47,10 @@ func main() {
 		MPSPipeDirectory:       flags.mpsPipeDir,
 		FailOpen:               flags.failOpen,
 		SupportSMSharing:       flags.supportSMSharing,
+		DefaultComputeMode:     annotations.ComputeMode(flags.defaultComputeMode),
+		EnforceComputeMode:     flags.enforceComputeMode,
+		NamespaceRequestDir:    flags.nsRequestDir,
+		NamespaceWait:          flags.nsWait,
 		RetroactiveEnforcement: flags.retroactiveEnforcement,
 		MapDir:                 flags.mapDir,
 		LogPodEvents:           flags.logPodEvents,

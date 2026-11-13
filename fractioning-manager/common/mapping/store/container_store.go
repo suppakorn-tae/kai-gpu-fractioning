@@ -36,6 +36,10 @@ type ContainerInfo struct {
 	// sidecar divides this by the device's total memory to derive the GPU fraction
 	// used to normalize SM utilization. Zero when no memory request is known.
 	RequestedMemoryMiB int64
+	// ComputeMode is the compute mode fractiond resolved for the container
+	// ("time-slicing", "sm-sharing", "sm-limit"); empty in records written
+	// before the field existed.
+	ComputeMode string
 }
 
 // Writer is the write side of the container->pod mapping storage, used by the

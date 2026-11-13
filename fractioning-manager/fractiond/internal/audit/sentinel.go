@@ -9,6 +9,8 @@ import (
 	"sync"
 
 	"github.com/containerd/nri/pkg/api"
+
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
 )
 
 // Sentinel ties detection to remediation for retroactive enforcement on NRI
@@ -41,6 +43,9 @@ type Config struct {
 	// bit, so a disabled feature can't produce a false violation for a
 	// container the hook itself would have rejected or downgraded.
 	SMSharingEnabled bool
+	// ComputeDefault and ComputeEnforce are the hook's compute-mode policy.
+	ComputeDefault annotations.ComputeMode
+	ComputeEnforce bool
 	// FailOpen is the create hook's fail-open policy, which decides what an
 	// unusable compute-mode annotation means: skip the container, or audit it
 	// against the time-slicing default the hook fell back to.
@@ -58,6 +63,8 @@ func NewSentinel(cfg Config, stopper ContainerStopper, log *slog.Logger) *Sentin
 			annotationPrefix: cfg.AnnotationPrefix,
 			mpsPipeDirectory: cfg.MPSPipeDirectory,
 			smSharingEnabled: cfg.SMSharingEnabled,
+			computeDefault:   cfg.ComputeDefault,
+			computeEnforce:   cfg.ComputeEnforce,
 			failOpen:         cfg.FailOpen,
 			log:              log,
 		},

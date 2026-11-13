@@ -30,6 +30,10 @@ type adapter struct {
 	// uses, so mapping and mutation select the same containers.
 	annotationPrefix string
 
+	// policy resolves the container's compute mode exactly as the mutation
+	// path does, so the mapping records the mode the container was given.
+	policy annotations.ComputePolicy
+
 	// log records per-container mapping decisions at debug level. It runs on the
 	// events worker goroutine (off the NRI hot path). May be nil (falls back to
 	// slog.Default()).
@@ -75,6 +79,9 @@ func (a adapter) container(pod *api.PodSandbox, container *api.Container) (store
 		PodUID:             pod.GetUid(),
 		GPUDevices:         gpudevices.FromContainer(container),
 		RequestedMemoryMiB: cfg.EffectiveMemoryMiB(),
+	}
+	if mode, err := annotations.ResolveComputeMode(pod.GetAnnotations(), container.GetName(), a.annotationPrefix, a.policy); err == nil {
+		info.ComputeMode = string(mode)
 	}
 	if linux := container.GetLinux(); linux != nil {
 		info.CgroupPath = linux.GetCgroupsPath()

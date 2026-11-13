@@ -44,6 +44,9 @@ type record struct {
 	// RequestedMemoryMiB is the container's allocated GPU memory in MiB, used by
 	// the metrics sidecar to derive the GPU fraction for SM-util normalization.
 	RequestedMemoryMiB int64 `json:"requestedMemoryMiB,omitempty"`
+	// ComputeMode is the container's resolved compute mode (sm-limit
+	// containers must only run GPU work through their MPS namespace).
+	ComputeMode string `json:"computeMode,omitempty"`
 }
 
 // newRecord projects a store.ContainerInfo onto the minimal on-disk schema. The
@@ -58,6 +61,7 @@ func newRecord(info store.ContainerInfo) record {
 		PodUID:             info.PodUID,
 		GPUDevices:         info.GPUDevices,
 		RequestedMemoryMiB: info.RequestedMemoryMiB,
+		ComputeMode:        info.ComputeMode,
 	}
 }
 
@@ -73,6 +77,7 @@ func (r record) toContainer(containerID string) store.ContainerInfo {
 		PodUID:             r.PodUID,
 		GPUDevices:         r.GPUDevices,
 		RequestedMemoryMiB: r.RequestedMemoryMiB,
+		ComputeMode:        r.ComputeMode,
 	}
 }
 

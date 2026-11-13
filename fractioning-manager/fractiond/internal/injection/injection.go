@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mpsns"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
 )
 
@@ -57,7 +58,14 @@ var AllEnvKeys = []string{
 // compute mode. Both the fractiond create hook (internal/plugin.go
 // buildAdjustment) and its audit detector (internal/audit) call this so the
 // expected mount can never drift between the two.
-func MPSPipeMount(mpsPipeDir string, mode annotations.ComputeMode) (source, destination string) {
+//
+// sm-limit mounts only the container's own namespace directory
+// (<pipe>/shared/<mpsns.NamespaceName(containerID)>), so the workload cannot
+// reach the node's root control socket or any other namespace's socket.
+func MPSPipeMount(mpsPipeDir string, mode annotations.ComputeMode, containerID string) (source, destination string) {
+	if mode == annotations.ComputeModeSMLimit {
+		return mpsns.PipeDir(mpsPipeDir, mpsns.NamespaceName(containerID)), configuration.ContainerMPSPipeDirectory
+	}
 	if mode == annotations.ComputeModeSMSharing {
 		// sm-sharing routes the container to the shared MPS server's socket
 		// on the host, mounted at a fixed in-container path that is

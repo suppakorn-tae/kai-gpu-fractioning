@@ -6,6 +6,7 @@ package injection
 import (
 	"testing"
 
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
 )
 
@@ -104,7 +105,7 @@ func TestMPSPipeMount(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			source, destination := MPSPipeMount(tt.mpsPipeDir, tt.mode)
+			source, destination := MPSPipeMount(tt.mpsPipeDir, tt.mode, "0123abcd")
 			if source != tt.wantSource {
 				t.Errorf("source = %q, want %q", source, tt.wantSource)
 			}
@@ -112,5 +113,15 @@ func TestMPSPipeMount(t *testing.T) {
 				t.Errorf("destination = %q, want %q", destination, tt.wantDestination)
 			}
 		})
+	}
+}
+
+func TestMPSPipeMountSMLimitScopesToNamespace(t *testing.T) {
+	src, dst := MPSPipeMount("/run/nvidia-mps", annotations.ComputeModeSMLimit, "091d5e1668d8d2aa32e19df57ceef60249ce28b3902b22e3b5585621be32d318")
+	if src != "/run/nvidia-mps/shared/fc091d5e1668d8d2aa32e19df57cee" {
+		t.Fatalf("source = %q, want only the container's namespace dir", src)
+	}
+	if dst != configuration.ContainerMPSPipeDirectory {
+		t.Fatalf("destination = %q", dst)
 	}
 }

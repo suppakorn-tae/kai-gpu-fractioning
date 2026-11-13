@@ -48,6 +48,11 @@ type detector struct {
 	// feature can't produce a false violation for a container the plugin
 	// itself would have rejected/downgraded.
 	smSharingEnabled bool
+	// computeDefault and computeEnforce mirror the plugin's compute-mode
+	// policy (--default-compute-mode / --enforce-compute-mode) so the audit
+	// expects exactly the mount the create hook would have produced.
+	computeDefault annotations.ComputeMode
+	computeEnforce bool
 	// failOpen is the create hook's fail-open policy — must match the fractiond
 	// plugin's configured value. It decides what an unusable compute-mode
 	// annotation means here, exactly as it does at creation: under fail-open the
@@ -129,7 +134,8 @@ func (d detector) check(pod *api.PodSandbox, container *api.Container) (violator
 	// mode typo suppress retroactive enforcement of valid memory annotations,
 	// which is the very case this audit exists for. Fall back to the same
 	// default and keep inspecting.
-	computeMode, err := annotations.ParseComputeMode(pod.GetAnnotations(), container.GetName(), d.annotationPrefix, d.smSharingEnabled)
+	computeMode, err := annotations.ResolveComputeMode(pod.GetAnnotations(), container.GetName(), d.annotationPrefix,
+		annotations.ComputePolicy{SMSharingEnabled: d.smSharingEnabled, Default: d.computeDefault, Enforce: d.computeEnforce})
 	if err != nil {
 		if !d.failOpen {
 			d.logger().Warn("audit: skipping container with unparseable GPU compute mode annotation",
@@ -172,7 +178,7 @@ func (d detector) check(pod *api.PodSandbox, container *api.Container) (violator
 // buildAdjustment's conditional injection.
 func (d detector) missingInjection(cfg annotations.GPUMemoryConfig, visibleDevices string, computeMode annotations.ComputeMode, container *api.Container) []string {
 	env := presentEnv(container.GetEnv())
-	expectedMountSource, expectedMountDestination := injection.MPSPipeMount(d.mpsPipeDirectory, computeMode)
+	expectedMountSource, expectedMountDestination := injection.MPSPipeMount(d.mpsPipeDirectory, computeMode, container.GetId())
 
 	var missing []string
 	// CUDA_MPS_PIPE_DIRECTORY is always injected for a fractioning container.
