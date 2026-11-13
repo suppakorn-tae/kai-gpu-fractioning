@@ -1,3 +1,5 @@
+> **Fork notice.** This is a modified fork of [kai-scheduler/gpu-fractioning](https://github.com/kai-scheduler/gpu-fractioning) (Apache-2.0), branch `sysbox-sm-limit`, based on upstream v0.1.6. It adds per-pod SM caps (`smLimit`), scoped MPS mounts and a GPU memory guard for Sysbox (`memoryGuard`). Changes are listed in [docs/fork/DESIGN.md](docs/fork/DESIGN.md) and the commit history after `v0.1.6`. Not affiliated with or endorsed by NVIDIA.
+
 # GPU Fractioning Operator
 
 A Kubernetes operator that enables **multiple pods to safely share a single GPU with enforced memory boundaries**.

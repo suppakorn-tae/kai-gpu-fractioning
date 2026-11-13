@@ -1,4 +1,4 @@
-// Copyright 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// Copyright 2026 suppakorn-tae. Part of a fork of kai-scheduler/gpu-fractioning.
 // SPDX-License-Identifier: Apache-2.0
 
 package fractiond
