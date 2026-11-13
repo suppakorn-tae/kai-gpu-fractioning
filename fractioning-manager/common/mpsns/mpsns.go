@@ -53,6 +53,10 @@ type Request struct {
 	// SMPercent optionally lowers the derived SM share (1-100, 0 = derive).
 	// It can never raise it above the memory share.
 	SMPercent int `json:"smPercent,omitempty"`
+	// Fraction is the pod's requested GPU fraction (KAI gpu-fraction, 0-1)
+	// when it asked by fraction; mpsd then uses it directly as the SM share
+	// instead of deriving one from MemoryMiB and the device total.
+	Fraction float64 `json:"fraction,omitempty"`
 	// GPUUUIDs are the GPUs the scheduler assigned, when known.
 	GPUUUIDs []string `json:"gpuUUIDs,omitempty"`
 }

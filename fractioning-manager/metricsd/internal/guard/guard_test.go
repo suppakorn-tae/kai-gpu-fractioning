@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/store"
 )
@@ -128,5 +129,56 @@ func TestReconcileSkipsContainersWithoutMemory(t *testing.T) {
 	newGuard(root, l, 0).Reconcile()
 	if l.sets != 0 {
 		t.Fatalf("wrote %d limits for a container without a memory allotment", l.sets)
+	}
+}
+
+func age(t *testing.T, root string) {
+	t.Helper()
+	old := time.Now().Add(-time.Hour)
+	_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			_ = os.Chtimes(p, old, old)
+		}
+		return nil
+	})
+}
+
+// Strays on cgroups that are not fractional containers are reset to unlimited
+// (including a pod slice and its child carrying the same stray value); the
+// fractional container keeps its limit; young cgroups are left alone.
+func TestSweepClearsStraysOutsideFractionalContainers(t *testing.T) {
+	root, scope := mkTree(t, "burstable")
+	other := filepath.Join(root, "kubepods.slice", "kubepods-besteffort.slice", "kubepods-besteffort-podgfd.slice")
+	otherScope := filepath.Join(other, "cri-containerd-gfd.scope")
+	young := filepath.Join(root, "kubepods.slice", "kubepods-besteffort.slice", "kubepods-besteffort-podnew.slice", "cri-containerd-new.scope")
+	for _, d := range []string{otherScope, young} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	age(t, root)
+	now := time.Now()
+	_ = os.Chtimes(young, now, now)
+	_ = os.Chtimes(filepath.Dir(young), now, now)
+
+	l := &fakeLimiter{entries: map[string]uint64{
+		nv(root, scope):      4 << 30,  // fractional container: keep
+		nv(root, other):      30 << 30, // stray on a pod slice
+		nv(root, otherScope): 30 << 30, // and on its container, same value
+		nv(root, young):      8 << 30,  // too young to judge
+	}}
+	g := newGuard(root, l, 4096)
+	g.Reconcile()
+
+	if v, _, _ := l.HardLimit(0, nv(root, scope)); v != 4<<30 {
+		t.Fatalf("fractional container limit changed to %d", v)
+	}
+	for _, p := range []string{other, otherScope} {
+		if v, _, _ := l.HardLimit(0, nv(root, p)); v != Unlimited {
+			t.Fatalf("%s: stray not cleared (%d)", p, v)
+		}
+	}
+	if v, _, _ := l.HardLimit(0, nv(root, young)); v != 8<<30 {
+		t.Fatal("young cgroup was swept")
 	}
 }

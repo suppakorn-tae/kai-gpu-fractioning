@@ -35,6 +35,12 @@ import (
 
 const mib = uint64(1) << 20
 
+// sweepMinAge protects cgroups the mapping may not list yet.
+const sweepMinAge = 30 * time.Second
+
+// Unlimited is NVML's "no limit" value (DEVICE_MEMORY_LIMIT_MAX).
+const Unlimited = ^uint64(0)
+
 // Limiter reads and writes NVML per-cgroup GPU memory limits. GPUs are
 // addressed by Linux device minor number, matching store.GPUDevice.
 type Limiter interface {
@@ -57,6 +63,9 @@ type Config struct {
 	// NVMLCgroupPrefix is the prefix NVML expects for cgroup paths: the host
 	// path of the cgroup v2 mount, normally /sys/fs/cgroup.
 	NVMLCgroupPrefix string
+	// SweepInterval is how often cgroups outside fractional containers are
+	// checked for stray limit entries (default 10s; negative disables).
+	SweepInterval time.Duration
 }
 
 // Guard reconciles per-cgroup GPU memory limits.
@@ -69,6 +78,8 @@ type Guard struct {
 	// asserted remembers the value last written per cgroup/GPU so corrections
 	// (a value that changed underneath us) are logged once, not every tick.
 	asserted map[string]uint64
+	// lastSweep is when stray entries were last swept.
+	lastSweep time.Time
 }
 
 // New returns a Guard. reader supplies the GPU-fractioning containers recorded
@@ -79,6 +90,9 @@ func New(cfg Config, reader store.Reader, limiter Limiter, log *slog.Logger) *Gu
 	}
 	if cfg.NVMLCgroupPrefix == "" {
 		cfg.NVMLCgroupPrefix = "/sys/fs/cgroup"
+	}
+	if cfg.SweepInterval == 0 {
+		cfg.SweepInterval = 10 * time.Second
 	}
 	if log == nil {
 		log = slog.Default()
@@ -105,9 +119,17 @@ func (g *Guard) Run(ctx context.Context) {
 	}
 }
 
-// Reconcile performs one pass over all recorded containers.
+// Reconcile performs one pass over all recorded containers, and periodically
+// sweeps stray entries off every other Kubernetes cgroup.
 func (g *Guard) Reconcile() {
 	live := map[string]struct{}{}
+	var protected []string
+	defer func() {
+		if g.cfg.SweepInterval > 0 && time.Since(g.lastSweep) >= g.cfg.SweepInterval {
+			g.sweep(protected)
+			g.lastSweep = time.Now()
+		}
+	}()
 	for _, c := range g.reader.ActiveContainers() {
 		if c.RequestedMemoryMiB <= 0 || c.ContainerID == "" {
 			continue
@@ -116,6 +138,7 @@ func (g *Guard) Reconcile() {
 		if !ok {
 			continue // container not (or no longer) running on this node
 		}
+		protected = append(protected, dir)
 		want := uint64(c.RequestedMemoryMiB) * mib
 		minors := g.minorsFor(c)
 		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
@@ -232,4 +255,60 @@ func ContainerCgroupDir(root, podUID, containerID string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// sweep resets limit entries on Kubernetes cgroups outside fractional
+// containers. Such entries are never legitimate (only fractional containers
+// get a GPU memory limit) but were observed on unrelated pods — including GPU
+// feature discovery, whose NVML view then shrank and made it publish a smaller
+// nvidia.com/gpu.memory, skewing every fraction the scheduler sized from it.
+// The walk is top-down, so a cleared parent exposes a child's own entry in the
+// same pass.
+func (g *Guard) sweep(protected []string) {
+	root := filepath.Join(g.cfg.CgroupRoot, "kubepods.slice")
+	inside := func(p string) bool {
+		for _, d := range protected {
+			if p == d || strings.HasPrefix(p, d+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		if inside(path) {
+			return fs.SkipDir
+		}
+		// A container's limit is set at creation, before fractiond's mapping
+		// (written asynchronously) lists it: leave young cgroups alone.
+		if info, err := d.Info(); err != nil || time.Since(info.ModTime()) < sweepMinAge {
+			return fs.SkipDir
+		}
+		nvmlPath := g.cfg.NVMLCgroupPrefix + strings.TrimPrefix(path, g.cfg.CgroupRoot)
+		parent := g.cfg.NVMLCgroupPrefix + strings.TrimPrefix(filepath.Dir(path), g.cfg.CgroupRoot)
+		for _, minor := range g.limiter.Minors() {
+			have, ok, _ := g.limiter.HardLimit(minor, nvmlPath)
+			if !ok || have == Unlimited {
+				continue
+			}
+			if ph, pok, _ := g.limiter.HardLimit(minor, parent); pok && ph == have {
+				continue // inherited, the ancestor's entry is handled on its own visit
+			}
+			if err := g.limiter.SetLimits(minor, nvmlPath, Unlimited, Unlimited); err != nil {
+				g.log.Warn("clearing stray GPU memory limit", "cgroup", nvmlPath, "minor", minor, "error", err)
+				continue
+			}
+			g.log.Warn("cleared stray GPU memory limit on a non-fractional cgroup", "cgroup", nvmlPath,
+				"minor", minor, "foundMiB", have/mib)
+		}
+		return nil
+	})
 }

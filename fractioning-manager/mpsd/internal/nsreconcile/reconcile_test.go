@@ -165,3 +165,28 @@ func TestParseMiB(t *testing.T) {
 		}
 	}
 }
+
+func TestFractionPercent(t *testing.T) {
+	for _, tc := range []struct {
+		f    float64
+		req  int
+		want int
+	}{{0.25, 0, 25}, {0.1, 0, 10}, {0.33, 0, 33}, {0.777, 0, 78}, {1, 0, 100}, {0.001, 0, 1}, {0.5, 20, 20}, {0.5, 90, 50}} {
+		if got := FractionPercent(tc.f, tc.req); got != tc.want {
+			t.Errorf("FractionPercent(%v,%d) = %d, want %d", tc.f, tc.req, got, tc.want)
+		}
+	}
+}
+
+// A request made by fraction must not depend on the (cgroup-limited) NVML total.
+func TestReconcileUsesFraction(t *testing.T) {
+	dir := t.TempDir()
+	mps := newFakeMPS()
+	r := New(Config{RequestDir: dir}, mps, fixedMem(4096), nil) // a wrong, shrunken total
+	q := mpsns.Request{Namespace: mpsns.NamespaceName("dddd"), ContainerID: "dddd", MemoryMiB: 10240, Fraction: 0.25}
+	_ = mpsns.Write(dir, q)
+	_ = r.Reconcile(context.Background())
+	if got := mps.ns[q.Namespace]; got != [2]string{"10240M", "25.00"} {
+		t.Fatalf("namespace = %v", got)
+	}
+}

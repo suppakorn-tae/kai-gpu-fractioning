@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -418,6 +419,7 @@ func (p *Plugin) ensureNamespace(pod *api.PodSandbox, ctr *api.Container, mem an
 		PodNS:       pod.GetNamespace(),
 		MemoryMiB:   mem.EffectiveMemoryMiB(),
 		SMPercent:   smPercent,
+		Fraction:    gpuFraction(pod.GetAnnotations()),
 		GPUUUIDs:    gpuUUIDs(visibleDevices),
 	}
 	if req.MemoryMiB <= 0 {
@@ -437,6 +439,16 @@ func (p *Plugin) ensureNamespace(pod *api.PodSandbox, ctr *api.Container, mem an
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+}
+
+// gpuFraction returns the scheduler's gpu-fraction pod annotation (0 < f <= 1),
+// or 0 when absent or not a valid fraction.
+func gpuFraction(a map[string]string) float64 {
+	f, err := strconv.ParseFloat(strings.TrimSpace(a["gpu-fraction"]), 64)
+	if err != nil || f <= 0 || f > 1 {
+		return 0
+	}
+	return f
 }
 
 // gpuUUIDs extracts GPU UUIDs from a device assignment such as

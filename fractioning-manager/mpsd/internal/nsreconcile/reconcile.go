@@ -18,7 +18,9 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -41,7 +43,8 @@ type DeviceMemory interface {
 type Config struct {
 	RequestDir string
 	Server     string        // MPS server the namespaces live on (mpsns.SharedServer)
-	Interval   time.Duration // pass interval; keep well under fractiond's --namespace-wait
+	Interval   time.Duration // how often the request dir is checked for changes; keep well under fractiond's --namespace-wait
+	Resync     time.Duration // full pass even without changes (heals a daemon restart); default 10s
 }
 
 // Reconciler keeps MPS namespaces in line with the request files.
@@ -69,6 +72,9 @@ func New(cfg Config, run Runner, mem DeviceMemory, log *slog.Logger) *Reconciler
 	if cfg.Interval <= 0 {
 		cfg.Interval = 100 * time.Millisecond
 	}
+	if cfg.Resync <= 0 {
+		cfg.Resync = 10 * time.Second
+	}
 	if log == nil {
 		log = slog.Default()
 	}
@@ -80,9 +86,21 @@ func (r *Reconciler) Run(ctx context.Context) {
 	r.log.Info("MPS namespace reconciler started", "requestDir", r.cfg.RequestDir, "server", r.cfg.Server, "interval", r.cfg.Interval)
 	t := time.NewTicker(r.cfg.Interval)
 	defer t.Stop()
+	var lastSig string
+	var lastPass time.Time
+	ok := false
 	for {
-		if err := r.Reconcile(ctx); err != nil {
-			r.log.Debug("namespace reconcile pass incomplete", "error", err)
+		// Talking to the control daemon is what costs (every command is
+		// logged by MPS), so only do it when the requests changed, after a
+		// failed pass, or every Resync.
+		sig := requestSignature(r.cfg.RequestDir)
+		if !ok || sig != lastSig || time.Since(lastPass) >= r.cfg.Resync {
+			err := r.Reconcile(ctx)
+			ok = err == nil
+			if err != nil {
+				r.log.Debug("namespace reconcile pass incomplete", "error", err)
+			}
+			lastSig, lastPass = sig, time.Now()
 		}
 		select {
 		case <-ctx.Done():
@@ -105,6 +123,15 @@ func SMPercent(memMiB, totalMiB int64, requested int) int {
 	return pct
 }
 
+// FractionPercent is the SM share for a request made by fraction.
+func FractionPercent(fraction float64, requested int) int {
+	pct := max(1, min(100, int(math.Ceil(fraction*100-1e-9))))
+	if requested > 0 && requested < pct {
+		pct = requested
+	}
+	return pct
+}
+
 // Reconcile performs one pass.
 func (r *Reconciler) Reconcile(ctx context.Context) error {
 	reqs, errs := mpsns.List(r.cfg.RequestDir)
@@ -121,12 +148,19 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		if len(req.GPUUUIDs) > 0 {
 			uuid = req.GPUUUIDs[0]
 		}
-		total, err := r.mem.TotalMiB(uuid)
-		if err != nil {
-			r.log.Warn("cannot size namespace: unknown GPU memory", "namespace", ns, "gpu", uuid, "error", err)
-			continue
+		var total int64
+		var pct int
+		if req.Fraction > 0 {
+			pct = FractionPercent(req.Fraction, req.SMPercent)
+		} else {
+			t, err := r.mem.TotalMiB(uuid)
+			if err != nil {
+				r.log.Warn("cannot size namespace: unknown GPU memory", "namespace", ns, "gpu", uuid, "error", err)
+				continue
+			}
+			total, pct = t, SMPercent(req.MemoryMiB, t, req.SMPercent)
 		}
-		want := state{pct: float64(SMPercent(req.MemoryMiB, total, req.SMPercent)), memMiB: req.MemoryMiB}
+		want := state{pct: float64(pct), memMiB: req.MemoryMiB}
 		cur, exists := have[ns]
 		if !exists {
 			if _, err := r.run.Run(ctx, "namespace", "create", ns, "--server="+r.cfg.Server); err != nil {
@@ -144,7 +178,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		}
 		if r.last[ns] != want {
 			r.log.Info("MPS namespace ready", "namespace", ns, "pod", req.PodNS+"/"+req.Pod, "container", req.Container,
-				"smPercent", want.pct, "memoryMiB", want.memMiB, "gpuTotalMiB", total, "requestedSMPercent", req.SMPercent)
+				"smPercent", want.pct, "memoryMiB", want.memMiB, "fraction", req.Fraction, "gpuTotalMiB", total, "requestedSMPercent", req.SMPercent)
 			r.last[ns] = want
 		}
 	}
@@ -228,4 +262,23 @@ func (c CLIRunner) Run(ctx context.Context, args ...string) (string, error) {
 		return string(out), fmt.Errorf("%s %s: %w: %s", c.Binary, strings.Join(full, " "), err, strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
+}
+
+// requestSignature is a cheap fingerprint of the request directory (names and
+// modification times), so passes can be skipped while nothing changed.
+func requestSignature(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "err:" + err.Error()
+	}
+	parts := make([]string, 0, len(entries))
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		parts = append(parts, e.Name()+"@"+strconv.FormatInt(info.ModTime().UnixNano(), 10))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ",")
 }
