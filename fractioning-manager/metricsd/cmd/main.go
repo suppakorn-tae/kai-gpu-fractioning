@@ -18,6 +18,7 @@ import (
 
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/fsstore"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/metricsd/internal/enforce"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/metricsd/internal/guard"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/metricsd/internal/metrics"
 )
@@ -61,6 +62,18 @@ func main() {
 			NVMLCgroupPrefix: flags.nvmlCgroupPrefix,
 		}, reader, limiter, logger.With("component", "memory-guard"))
 		go g.Run(ctx)
+	}
+
+	if flags.enforceInterval > 0 {
+		procs, err := enforce.NewNVMLProcesses()
+		if err != nil {
+			logger.Error("sm-limit enforcement: NVML unavailable", "error", err)
+			os.Exit(1)
+		}
+		defer procs.Close()
+		e := enforce.New(flags.enforceInterval, procs, metrics.NewProcCgroupResolver(flags.procRoot), reader, nil,
+			logger.With("component", "sm-limit-enforcer"))
+		go e.Run(ctx)
 	}
 
 	if !flags.metricsEnabled {

@@ -47,6 +47,9 @@ type cliFlags struct {
 	cgroupRoot string
 	// nvmlCgroupPrefix is the host path NVML expects cgroup paths to start with.
 	nvmlCgroupPrefix string
+	// enforceInterval is how often native GPU contexts in sm-limit containers
+	// are looked for and killed (0 disables).
+	enforceInterval time.Duration
 }
 
 // parseFlags reads the metricsd configuration from CLI flags, each with an env
@@ -68,6 +71,7 @@ func parseFlags() cliFlags {
 	flag.DurationVar(&f.memoryGuardInterval, "memory-guard-interval", env.Duration("MEMORY_GUARD_INTERVAL", 0), "re-assert each GPU-fractioning container's NVML memory limit on its whole cgroup subtree this often; 0 disables")
 	flag.StringVar(&f.cgroupRoot, "cgroup-root", env.String("CGROUP_ROOT", "/sys/fs/cgroup"), "where the host cgroup v2 hierarchy is mounted in this container")
 	flag.StringVar(&f.nvmlCgroupPrefix, "nvml-cgroup-prefix", env.String("NVML_CGROUP_PREFIX", "/sys/fs/cgroup"), "host path of the cgroup v2 mount, as NVML expects it in cgroup paths")
+	flag.DurationVar(&f.enforceInterval, "sm-limit-enforce-interval", env.Duration("SM_LIMIT_ENFORCE_INTERVAL", 0), "kill processes in sm-limit containers that run a GPU context outside their MPS namespace, checking this often; 0 disables")
 	flag.Parse()
 	return f
 }

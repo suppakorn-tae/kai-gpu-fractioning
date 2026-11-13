@@ -97,21 +97,21 @@ func twoFractionalPodsFixture(t *testing.T) *Runtime {
 
 	// Both pods reference GPU index 0 — they share one physical device (0.5 each).
 	podA := store.ContainerInfo{
-		ContainerID:       "ctr-pod-a",
-		Container:         "trainer",
-		Pod:               "pod-a",
-		Namespace:         e2eNamespace,
-		PodUID:            "uid-pod-a",
-		GPUDevices:        []store.GPUDevice{{Index: e2eGPUIndex}},
+		ContainerID:        "ctr-pod-a",
+		Container:          "trainer",
+		Pod:                "pod-a",
+		Namespace:          e2eNamespace,
+		PodUID:             "uid-pod-a",
+		GPUDevices:         []store.GPUDevice{{Index: e2eGPUIndex}},
 		RequestedMemoryMiB: e2eRequestedMemoryMiB,
 	}
 	podB := store.ContainerInfo{
-		ContainerID:       "ctr-pod-b",
-		Container:         "worker",
-		Pod:               "pod-b",
-		Namespace:         e2eNamespace,
-		PodUID:            "uid-pod-b",
-		GPUDevices:        []store.GPUDevice{{Index: e2eGPUIndex}},
+		ContainerID:        "ctr-pod-b",
+		Container:          "worker",
+		Pod:                "pod-b",
+		Namespace:          e2eNamespace,
+		PodUID:             "uid-pod-b",
+		GPUDevices:         []store.GPUDevice{{Index: e2eGPUIndex}},
 		RequestedMemoryMiB: e2eRequestedMemoryMiB,
 	}
 
