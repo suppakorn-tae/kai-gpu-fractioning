@@ -114,6 +114,17 @@ spec:
                       Once stable, the retry budget and backoff reset. Default: 5m.
                     type: string
                 type: object
+              memoryGuard:
+                description: |-
+                  memoryGuard keeps each fractional container's NVML GPU memory limit
+                  correct on its whole cgroup subtree. Needed with runtimes that run the
+                  workload in a child cgroup (e.g. Sysbox's init.scope), where a stray
+                  child entry can otherwise override the container's limit.
+                properties:
+                  enabled:
+                    description: enabled turns the guard on.
+                    type: boolean
+                type: object
               metricsAgent:
                 description: |-
                   metricsAgent configures the GPU metrics exporter (metricsd), which runs as
@@ -2191,6 +2202,22 @@ spec:
                   runtime class (only safe when the default runtime already provides NVIDIA
                   GPU/NVML access).
                 type: string
+              smLimit:
+                description: |-
+                  smLimit gives every fractional container its own MPS namespace with an
+                  SM (active-thread) share equal to its GPU memory share, mounts only that
+                  namespace into the container, and kills GPU processes that bypass it.
+                  Requires sm-sharing support (the shared MPS server).
+                properties:
+                  enabled:
+                    description: enabled makes sm-limit the default compute mode.
+                    type: boolean
+                  enforce:
+                    description: |-
+                      enforce makes sm-limit the only compute mode: the per-container
+                      gpu-compute.mode annotation is ignored, so workloads cannot opt out.
+                    type: boolean
+                type: object
             required:
             - nodeSelector
             type: object

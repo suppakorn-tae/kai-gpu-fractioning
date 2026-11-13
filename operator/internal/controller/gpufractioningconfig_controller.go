@@ -149,8 +149,9 @@ func NewGpuFractioningConfigReconciler(
 // so each reconcile sees the latest configuration.
 func buildDaemons(spec *v1alpha1.GpuFractioningConfigSpec, mpsdAuditLog, supportSMSharing bool) []daemonmgr.ManagedDaemon {
 	return []daemonmgr.ManagedDaemon{
-		fractiond.NewFractiondDaemon(spec.FractioningAgent, spec.MetricsAgent, supportSMSharing),
-		mpsd.NewMpsdDaemon(spec.MpsDaemon, mpsdAuditLog, supportSMSharing),
+		fractiond.NewFractiondDaemon(spec.FractioningAgent, spec.MetricsAgent, supportSMSharing,
+			fractiond.WithSMLimit(spec.SMLimit), fractiond.WithMemoryGuard(spec.MemoryGuard)),
+		mpsd.NewMpsdDaemon(spec.MpsDaemon, mpsdAuditLog, supportSMSharing, mpsd.WithSMLimit(spec.SMLimit)),
 	}
 }
 

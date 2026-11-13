@@ -65,6 +65,41 @@ type daemon struct {
 	fractioningSpec  *v1alpha1.FractioningAgentSpec
 	metricsSpec      *v1alpha1.MetricsAgentSpec
 	supportSMSharing bool // Helm-injected sm-sharing chicken bit
+	smLimit          *v1alpha1.SMLimitSpec
+	memoryGuard      *v1alpha1.MemoryGuardSpec
+}
+
+// Option configures optional fractiond/metricsd features.
+type Option func(*daemon)
+
+// WithSMLimit enables the sm-limit compute mode (needs sm-sharing support).
+func WithSMLimit(s *v1alpha1.SMLimitSpec) Option { return func(d *daemon) { d.smLimit = s } }
+
+// WithMemoryGuard enables metricsd's cgroup-subtree GPU memory guard.
+func WithMemoryGuard(g *v1alpha1.MemoryGuardSpec) Option {
+	return func(d *daemon) { d.memoryGuard = g }
+}
+
+const (
+	// nsRequestDir is the host directory for sm-limit namespace requests,
+	// shared by fractiond and mpsd only (mpsns.DefaultRequestDir).
+	nsRequestDir       = "/run/gpu-fractioning/mps-ns"
+	volumeNSRequests   = "mps-ns-requests"
+	volumeHostCgroup   = "host-cgroup"
+	hostCgroupDir      = "/sys/fs/cgroup"
+	guardInterval      = "500ms"
+	enforcerInterval   = "500ms"
+	computeModeSMLimit = "sm-limit"
+)
+
+func (d *daemon) smLimitOn() bool { return d.supportSMSharing && d.smLimit != nil && d.smLimit.Enabled }
+
+func (d *daemon) memoryGuardOn() bool { return d.memoryGuard != nil && d.memoryGuard.Enabled }
+
+// nsRequestsVolume is the hostPath for sm-limit namespace requests.
+func nsRequestsVolume() corev1.Volume {
+	return corev1.Volume{Name: volumeNSRequests, VolumeSource: corev1.VolumeSource{
+		HostPath: &corev1.HostPathVolumeSource{Path: nsRequestDir, Type: new(corev1.HostPathDirectoryOrCreate)}}}
 }
 
 // NewFractiondDaemon returns a ManagedDaemon for the fractiond NRI plugin. The
@@ -73,8 +108,12 @@ type daemon struct {
 // fractiond rejects the gpu-compute.mode: sm-sharing annotation like any other
 // invalid value, since the shared MPS server mpsd would back it with is also
 // disabled by the same toggle.
-func NewFractiondDaemon(spec *v1alpha1.FractioningAgentSpec, metrics *v1alpha1.MetricsAgentSpec, supportSMSharing bool) daemonmgr.ManagedDaemon {
-	return &daemon{fractioningSpec: spec, metricsSpec: metrics, supportSMSharing: supportSMSharing}
+func NewFractiondDaemon(spec *v1alpha1.FractioningAgentSpec, metrics *v1alpha1.MetricsAgentSpec, supportSMSharing bool, opts ...Option) daemonmgr.ManagedDaemon {
+	d := &daemon{fractioningSpec: spec, metricsSpec: metrics, supportSMSharing: supportSMSharing}
+	for _, o := range opts {
+		o(d)
+	}
+	return d
 }
 
 func (d *daemon) Name() string { return daemonName }
@@ -104,6 +143,16 @@ func (d *daemon) BuildDaemonSet(opts daemonmgr.BuildOptions) *appsv1.DaemonSet {
 
 	fractiondContainer, fractiondVolumes := d.buildFractiondContainer(opts)
 	podSpec.Volumes = append(podSpec.Volumes, fractiondVolumes...)
+	if d.smLimitOn() {
+		podSpec.Volumes = append(podSpec.Volumes, nsRequestsVolume())
+		fractiondContainer.VolumeMounts = append(fractiondContainer.VolumeMounts,
+			corev1.VolumeMount{Name: volumeNSRequests, MountPath: nsRequestDir})
+		fractiondContainer.Env = append(fractiondContainer.Env,
+			corev1.EnvVar{Name: "DEFAULT_COMPUTE_MODE", Value: computeModeSMLimit},
+			corev1.EnvVar{Name: "ENFORCE_COMPUTE_MODE", Value: strconv.FormatBool(d.smLimit.Enforce)},
+			corev1.EnvVar{Name: "NAMESPACE_REQUEST_DIR", Value: nsRequestDir},
+		)
+	}
 
 	metricsOn := d.metricsEnabled()
 	if metricsOn {
@@ -154,6 +203,11 @@ func metricsSharedVolume() (corev1.Volume, corev1.VolumeMount) {
 func (d *daemon) applyMetricsSidecar(result *appsv1.DaemonSet, opts daemonmgr.BuildOptions) {
 	if d.metricsSpec != nil {
 		result.Spec.Template.Spec.Volumes = append(result.Spec.Template.Spec.Volumes, d.metricsSpec.Volumes...)
+	}
+	if d.memoryGuardOn() {
+		result.Spec.Template.Spec.Volumes = append(result.Spec.Template.Spec.Volumes, corev1.Volume{
+			Name: volumeHostCgroup, VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{Path: hostCgroupDir, Type: new(corev1.HostPathDirectory)}}})
 	}
 	result.Spec.Template.Spec.Containers = append(result.Spec.Template.Spec.Containers, d.buildMetricsdContainer(opts))
 
@@ -361,6 +415,15 @@ func (d *daemon) buildMetricsdContainer(opts daemonmgr.BuildOptions) corev1.Cont
 	}
 	if d.metricsSpec != nil {
 		c.VolumeMounts = append(c.VolumeMounts, d.metricsSpec.VolumeMounts...)
+	}
+	if d.memoryGuardOn() {
+		// The host hierarchy at the same path, so the cgroup paths metricsd
+		// hands to NVML are host paths.
+		c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{Name: volumeHostCgroup, MountPath: hostCgroupDir})
+		c.Env = append(c.Env, corev1.EnvVar{Name: "MEMORY_GUARD_INTERVAL", Value: guardInterval})
+	}
+	if d.smLimitOn() {
+		c.Env = append(c.Env, corev1.EnvVar{Name: "SM_LIMIT_ENFORCE_INTERVAL", Value: enforcerInterval})
 	}
 	// Appended, not assigned: the NVIDIA vars above are what get libnvidia-ml.so
 	// mounted into the container, so replacing the slice would break NVML.

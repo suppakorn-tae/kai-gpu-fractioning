@@ -42,3 +42,12 @@ spec:
     volumeMounts:
       {{- toYaml .Values.metricsAgent.volumeMounts | nindent 6 }}
     {{- end }}
+  {{- with .Values.smLimit }}
+  smLimit:
+    enabled: {{ .enabled | default false }}
+    enforce: {{ .enforce | default false }}
+  {{- end }}
+  {{- with .Values.memoryGuard }}
+  memoryGuard:
+    enabled: {{ .enabled | default false }}
+  {{- end }}

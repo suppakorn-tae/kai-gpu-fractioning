@@ -168,3 +168,17 @@ resources:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# smLimit (fork): give every fractional container its own MPS namespace with an
+# SM share equal to its GPU memory share, mount only that namespace, and kill GPU
+# processes that bypass it. Needs sm-sharing support (the shared MPS server).
+#   enforce: ignore the per-pod gpu-compute.mode annotation (no opting out).
+smLimit:
+  enabled: false
+  enforce: false
+
+# memoryGuard (fork): keep each fractional container's NVML GPU memory limit
+# correct on its whole cgroup subtree. Turn on for runtimes that run workloads
+# in a child cgroup (e.g. Sysbox's init.scope).
+memoryGuard:
+  enabled: false

@@ -47,15 +47,32 @@ type daemon struct {
 	spec             *v1alpha1.MpsDaemonSpec
 	auditLog         bool // set  level of the memacct audit log
 	supportSMSharing bool // Helm-injected sm-sharing chicken bit
+	smLimit          *v1alpha1.SMLimitSpec
 }
+
+// Option configures optional mpsd features.
+type Option func(*daemon)
+
+// WithSMLimit mounts the sm-limit namespace request directory so mpsd can
+// reconcile per-container MPS namespaces.
+func WithSMLimit(s *v1alpha1.SMLimitSpec) Option { return func(d *daemon) { d.smLimit = s } }
+
+const (
+	nsRequestDir     = "/run/gpu-fractioning/mps-ns"
+	volumeNSRequests = "mps-ns-requests"
+)
 
 // NewMpsdDaemon returns a ManagedDaemon for the MPS daemon supervisor.
 // auditLog is the Helm-injected MPS memacct audit-log default. supportSMSharing
 // is the Helm-injected sm-sharing chicken bit: when false, mpsd renders its MPS
 // config with the shared server (context-share) disabled, exactly as it did
 // before the sm-sharing feature existed.
-func NewMpsdDaemon(spec *v1alpha1.MpsDaemonSpec, auditLog, supportSMSharing bool) daemonmgr.ManagedDaemon {
-	return &daemon{spec: spec, auditLog: auditLog, supportSMSharing: supportSMSharing}
+func NewMpsdDaemon(spec *v1alpha1.MpsDaemonSpec, auditLog, supportSMSharing bool, opts ...Option) daemonmgr.ManagedDaemon {
+	d := &daemon{spec: spec, auditLog: auditLog, supportSMSharing: supportSMSharing}
+	for _, o := range opts {
+		o(d)
+	}
+	return d
 }
 
 func (d *daemon) Name() string { return daemonName }
@@ -102,6 +119,12 @@ func (d *daemon) BuildDaemonSet(opts daemonmgr.BuildOptions) *appsv1.DaemonSet {
 		corev1.EnvVar{Name: "MPS_SUPPORT_SM_SHARING", Value: strconv.FormatBool(d.supportSMSharing)},
 	)
 	container.Env = append(container.Env, daemonmgr.FIPSOnlyEnv(opts.FIPSOnly)...)
+	if d.supportSMSharing && d.smLimit != nil && d.smLimit.Enabled {
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: volumeNSRequests, MountPath: nsRequestDir})
+		volumes = append(volumes, corev1.Volume{Name: volumeNSRequests, VolumeSource: corev1.VolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{Path: nsRequestDir, Type: new(corev1.HostPathDirectoryOrCreate)}}})
+		container.Env = append(container.Env, corev1.EnvVar{Name: "NAMESPACE_REQUEST_DIR", Value: nsRequestDir})
+	}
 	result.Spec.Template.Spec.Containers = append(result.Spec.Template.Spec.Containers, container)
 	result.Spec.Template.Spec.Volumes = append(result.Spec.Template.Spec.Volumes, volumes...)
 

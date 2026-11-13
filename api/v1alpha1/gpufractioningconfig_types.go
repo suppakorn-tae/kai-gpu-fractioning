@@ -43,6 +43,38 @@ type GpuFractioningConfigSpec struct {
 	// mpsDaemon configures the MPS daemon supervisor (mpsd).
 	// +optional
 	MpsDaemon *MpsDaemonSpec `json:"mpsDaemon,omitempty"`
+
+	// smLimit gives every fractional container its own MPS namespace with an
+	// SM (active-thread) share equal to its GPU memory share, mounts only that
+	// namespace into the container, and kills GPU processes that bypass it.
+	// Requires sm-sharing support (the shared MPS server).
+	// +optional
+	SMLimit *SMLimitSpec `json:"smLimit,omitempty"`
+
+	// memoryGuard keeps each fractional container's NVML GPU memory limit
+	// correct on its whole cgroup subtree. Needed with runtimes that run the
+	// workload in a child cgroup (e.g. Sysbox's init.scope), where a stray
+	// child entry can otherwise override the container's limit.
+	// +optional
+	MemoryGuard *MemoryGuardSpec `json:"memoryGuard,omitempty"`
+}
+
+// SMLimitSpec configures the sm-limit compute mode.
+type SMLimitSpec struct {
+	// enabled makes sm-limit the default compute mode.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+	// enforce makes sm-limit the only compute mode: the per-container
+	// gpu-compute.mode annotation is ignored, so workloads cannot opt out.
+	// +optional
+	Enforce bool `json:"enforce,omitempty"`
+}
+
+// MemoryGuardSpec configures the cgroup-subtree GPU memory guard in metricsd.
+type MemoryGuardSpec struct {
+	// enabled turns the guard on.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // FractioningAgentSpec configures the fractiond DaemonSet managed by the controller.
