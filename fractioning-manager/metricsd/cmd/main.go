@@ -18,6 +18,7 @@ import (
 
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mapping/fsstore"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/metricsd/internal/guard"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/metricsd/internal/metrics"
 )
 
@@ -41,16 +42,32 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if !flags.metricsEnabled {
-		logger.Info("GPU metrics exporter disabled; nothing to do")
-		return
-	}
-
 	logger.Info("container->pod mapping handoff directory", "mapDir", flags.mapDir)
 
 	// fractiond writes the container->pod mapping to mapDir (a shared volume); this
 	// sidecar reads it back to attribute NVML-reported GPU processes to pods.
 	reader := fsstore.NewReader(flags.mapDir, logger)
+
+	if flags.memoryGuardInterval > 0 {
+		limiter, err := guard.NewNVMLLimiter()
+		if err != nil {
+			logger.Error("GPU memory guard: NVML unavailable", "error", err)
+			os.Exit(1)
+		}
+		defer func() { _ = limiter.Close() }()
+		g := guard.New(guard.Config{
+			Interval:         flags.memoryGuardInterval,
+			CgroupRoot:       flags.cgroupRoot,
+			NVMLCgroupPrefix: flags.nvmlCgroupPrefix,
+		}, reader, limiter, logger.With("component", "memory-guard"))
+		go g.Run(ctx)
+	}
+
+	if !flags.metricsEnabled {
+		logger.Info("GPU metrics exporter disabled")
+		<-ctx.Done()
+		return
+	}
 
 	runtime, err := metrics.New(ctx, metrics.Config{
 		Enabled:             true,

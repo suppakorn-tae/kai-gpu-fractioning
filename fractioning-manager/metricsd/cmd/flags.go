@@ -39,6 +39,14 @@ type cliFlags struct {
 	// fall back to the built-in gpu_fractioning_* defaults. Set these (e.g. via Helm)
 	// to make metricsd emit the names a downstream consumer expects.
 	metricNames metrics.MetricNames
+
+	// memoryGuardInterval is how often the cgroup-subtree GPU memory guard
+	// re-asserts each container's limit (0 disables it).
+	memoryGuardInterval time.Duration
+	// cgroupRoot is where the host cgroup v2 hierarchy is mounted in this container.
+	cgroupRoot string
+	// nvmlCgroupPrefix is the host path NVML expects cgroup paths to start with.
+	nvmlCgroupPrefix string
 }
 
 // parseFlags reads the metricsd configuration from CLI flags, each with an env
@@ -57,6 +65,9 @@ func parseFlags() cliFlags {
 	flag.StringVar(&f.metricNames.GPUMemoryUsedBytes, "metric-name-gpu-memory-used-bytes", env.String("METRIC_NAME_GPU_MEMORY_USED_BYTES", ""), "override the GPU memory-used-bytes metric name (default gpu_fractioning_gpu_memory_used_bytes)")
 	flag.StringVar(&f.metricNames.GPUSMUtilizationPercent, "metric-name-gpu-sm-utilization-percent", env.String("METRIC_NAME_GPU_SM_UTILIZATION_PERCENT", ""), "override the GPU SM-utilization metric name (default gpu_fractioning_gpu_sm_utilization_percent)")
 	flag.StringVar(&f.metricNames.GPUSMUtilizationPercentNormalized, "metric-name-gpu-sm-utilization-percent-normalized", env.String("METRIC_NAME_GPU_SM_UTILIZATION_PERCENT_NORMALIZED", ""), "override the normalized GPU SM-utilization metric name (default gpu_fractioning_gpu_sm_utilization_percent_normalized)")
+	flag.DurationVar(&f.memoryGuardInterval, "memory-guard-interval", env.Duration("MEMORY_GUARD_INTERVAL", 0), "re-assert each GPU-fractioning container's NVML memory limit on its whole cgroup subtree this often; 0 disables")
+	flag.StringVar(&f.cgroupRoot, "cgroup-root", env.String("CGROUP_ROOT", "/sys/fs/cgroup"), "where the host cgroup v2 hierarchy is mounted in this container")
+	flag.StringVar(&f.nvmlCgroupPrefix, "nvml-cgroup-prefix", env.String("NVML_CGROUP_PREFIX", "/sys/fs/cgroup"), "host path of the cgroup v2 mount, as NVML expects it in cgroup paths")
 	flag.Parse()
 	return f
 }

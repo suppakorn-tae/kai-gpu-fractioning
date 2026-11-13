@@ -3,7 +3,7 @@ module github.com/kai-scheduler/gpu-fractioning/fractioning-manager/metricsd
 go 1.26.4
 
 require (
-	github.com/NVIDIA/go-nvml v0.13.3-1
+	github.com/NVIDIA/go-nvml v0.13.4-0
 	github.com/kai-scheduler/gpu-fractioning v0.0.0
 	github.com/kai-scheduler/gpu-fractioning/pkg v0.0.0
 	github.com/prometheus/client_golang v1.24.1
