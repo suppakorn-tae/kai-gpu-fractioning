@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/configuration"
+	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/common/mpsns"
 	"github.com/kai-scheduler/gpu-fractioning/fractioning-manager/fractiond/internal/annotations"
 )
 
@@ -118,7 +119,7 @@ func TestMPSPipeMount(t *testing.T) {
 
 func TestMPSPipeMountSMLimitScopesToNamespace(t *testing.T) {
 	src, dst := MPSPipeMount("/run/nvidia-mps", annotations.ComputeModeSMLimit, "091d5e1668d8d2aa32e19df57ceef60249ce28b3902b22e3b5585621be32d318")
-	if src != "/run/nvidia-mps/shared/fc091d5e1668d8d2aa32e19df57cee" {
+	if src != "/run/nvidia-mps/shared/"+mpsns.NamespaceName("091d5e1668d8d2aa32e19df57ceef60249ce28b3902b22e3b5585621be32d318") {
 		t.Fatalf("source = %q, want only the container's namespace dir", src)
 	}
 	if dst != configuration.ContainerMPSPipeDirectory {

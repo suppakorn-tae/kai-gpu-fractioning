@@ -66,10 +66,11 @@ const (
 	ComputeModeSMLimit ComputeMode = "sm-limit"
 )
 
-// smPercentSuffix builds the optional per-container SM-share annotation,
-// e.g. "nvidia.com/container.trainer.gpu-compute.sm-percent". It can only
-// lower the share sm-limit derives from the memory allotment.
-const smPercentSuffix = "gpu-compute.sm-percent"
+// SMPercentAnnotation is the optional pod-level SM-share annotation, next to
+// the scheduler's own "gpu-fraction". It can only lower the share sm-limit
+// derives from the fraction. It is deliberately outside the
+// "nvidia.com/container." prefix: KAI's admission rejects unknown keys there.
+const SMPercentAnnotation = "gpu-sm-percent"
 
 // ComputePolicy is the cluster's compute-mode policy, set on fractiond's
 // command line.
@@ -131,10 +132,10 @@ func (p ComputePolicy) allowed(m ComputeMode) error {
 	}
 }
 
-// ParseSMPercent reads the optional "<prefix><containerName>.gpu-compute.sm-percent"
-// annotation: an integer 1-100, or 0 when absent.
-func ParseSMPercent(annotations map[string]string, containerName, prefix string) (int, error) {
-	key := prefix + containerName + "." + smPercentSuffix
+// ParseSMPercent reads the optional pod-level "gpu-sm-percent" annotation: an
+// integer 1-100, or 0 when absent.
+func ParseSMPercent(annotations map[string]string) (int, error) {
+	key := SMPercentAnnotation
 	raw, ok := annotations[key]
 	if !ok {
 		return 0, nil

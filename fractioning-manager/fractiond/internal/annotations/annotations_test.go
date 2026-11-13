@@ -436,18 +436,18 @@ func TestResolveComputeMode(t *testing.T) {
 }
 
 func TestParseSMPercent(t *testing.T) {
-	key := configuration.DefaultAnnotationPrefix + "trainer.gpu-compute.sm-percent"
+	key := SMPercentAnnotation
 	for raw, want := range map[string]int{"25": 25, " 100 ": 100} {
-		if got, err := ParseSMPercent(map[string]string{key: raw}, "trainer", configuration.DefaultAnnotationPrefix); err != nil || got != want {
+		if got, err := ParseSMPercent(map[string]string{key: raw}); err != nil || got != want {
 			t.Fatalf("%q -> %d, %v", raw, got, err)
 		}
 	}
 	for _, raw := range []string{"0", "101", "x", ""} {
-		if _, err := ParseSMPercent(map[string]string{key: raw}, "trainer", configuration.DefaultAnnotationPrefix); err == nil {
+		if _, err := ParseSMPercent(map[string]string{key: raw}); err == nil {
 			t.Fatalf("%q accepted", raw)
 		}
 	}
-	if got, err := ParseSMPercent(nil, "trainer", configuration.DefaultAnnotationPrefix); got != 0 || err != nil {
+	if got, err := ParseSMPercent(nil); got != 0 || err != nil {
 		t.Fatalf("absent -> %d, %v", got, err)
 	}
 }

@@ -6,14 +6,18 @@ package mpsns
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestNamespaceName(t *testing.T) {
-	id := "091D5E1668d8d2aa32e19df57ceef60249ce28b3902b22e3b5585621be32d318"
+	id := "091d5e1668d8d2aa32e19df57ceef60249ce28b3902b22e3b5585621be32d318"
 	got := NamespaceName(id)
-	if got != "fc091d5e1668d8d2aa32e19df57cee" || len(got) != 30 {
-		t.Fatalf("NamespaceName = %q", got)
+	if len(got) != 30 || got != NamespaceName(id) || got == NamespaceName(id+"x") {
+		t.Fatalf("NamespaceName = %q: want 30 chars, deterministic, distinct", got)
+	}
+	if strings.Contains(got, id[:8]) {
+		t.Fatalf("NamespaceName %q leaks the container ID", got)
 	}
 	if !IsOwned(got) || IsOwned("default") || IsOwned("fc") {
 		t.Fatal("IsOwned misclassifies")

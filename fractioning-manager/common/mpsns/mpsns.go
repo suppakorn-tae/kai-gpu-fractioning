@@ -14,6 +14,8 @@
 package mpsns
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,19 +64,13 @@ type Request struct {
 }
 
 // NamespaceName returns the MPS namespace name for a container ID: "fc" plus
-// the first 28 characters of the (hex) ID, lowercased and stripped of anything
-// MPS would reject.
+// 28 hex characters of the ID's SHA-256. It is deterministic (fractiond, its
+// audit and mpsd all derive it independently) but opaque: every tenant can
+// list the shared server's namespaces through its own socket, so the name must
+// not reveal other containers' IDs.
 func NamespaceName(containerID string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(containerID) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-			if b.Len() == nameIDLen {
-				break
-			}
-		}
-	}
-	return NamePrefix + b.String()
+	sum := sha256.Sum256([]byte(containerID))
+	return NamePrefix + hex.EncodeToString(sum[:])[:nameIDLen]
 }
 
 // IsOwned reports whether an MPS namespace name was produced by NamespaceName.

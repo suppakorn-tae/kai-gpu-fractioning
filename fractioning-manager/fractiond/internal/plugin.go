@@ -406,7 +406,7 @@ func (p *Plugin) RemoveContainer(_ context.Context, _ *api.PodSandbox, ctr *api.
 // ensureNamespace asks mpsd for the container's MPS namespace and waits until
 // its control socket exists.
 func (p *Plugin) ensureNamespace(pod *api.PodSandbox, ctr *api.Container, mem annotations.GPUMemoryConfig, visibleDevices string) error {
-	smPercent, err := annotations.ParseSMPercent(pod.Annotations, ctr.Name, p.AnnotationPrefix)
+	smPercent, err := annotations.ParseSMPercent(pod.Annotations)
 	if err != nil {
 		return err
 	}

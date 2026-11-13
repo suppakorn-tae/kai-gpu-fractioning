@@ -37,6 +37,9 @@ func newSMLimitPlugin(t *testing.T, enforce bool, wait time.Duration) (p *Plugin
 	if err != nil {
 		t.Fatalf("NewPlugin: %v", err)
 	}
+	// Registered after the TempDirs, so it runs before they are removed: the
+	// mapping is written asynchronously.
+	t.Cleanup(p.Flush)
 	return p, pipeDir, reqDir
 }
 
@@ -56,8 +59,10 @@ func smLimitPod(extra map[string]string) *api.PodSandbox {
 func fakeMPSD(t *testing.T, pipeDir, reqDir string) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
+	done := make(chan struct{})
+	t.Cleanup(func() { cancel(); <-done })
 	go func() {
+		defer close(done)
 		for ctx.Err() == nil {
 			reqs, _ := mpsns.List(reqDir)
 			for ns := range reqs {
@@ -96,7 +101,7 @@ func TestSMLimit_MountsOnlyOwnNamespace(t *testing.T) {
 	fakeMPSD(t, pipeDir, reqDir)
 
 	adj, _, err := p.CreateContainer(context.Background(), smLimitPod(map[string]string{
-		"nvidia.com/container.main.gpu-compute.sm-percent": "20",
+		"gpu-sm-percent": "20",
 	}), &api.Container{Id: smLimitCtrID, Name: "main"})
 	if err != nil {
 		t.Fatalf("CreateContainer: %v", err)
